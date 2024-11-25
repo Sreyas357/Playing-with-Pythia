@@ -8,9 +8,9 @@
 #define EQTABLE_SIZE 256
 #define NUM_TILES  3
 #define TILE_WIDTH 4
-#define NUM_DELTAS 3
+#define NUM_DELTAS 4
 #define PREFETCH_DEGREE 5
-#define NUM_FEATURES 1+NUM_DELTAS
+#define NUM_FEATURES 1+1
 
 #define expected_coverage 0.8
 #define expected_accuracy 0.8
@@ -195,6 +195,7 @@ unordered_map<int,int>prefetch_degree_map;
 
 void modify_rewards(){
 
+
     double coverage = 1 - double(l2_access)/l1_access;
     double accuracy = double(useful_prefetches)/num_prefecthes;
 
@@ -365,14 +366,36 @@ void CACHE::l1d_prefetcher_final_stats()
 
 uint16_t hash_ip(uint64_t x){
     //x = x >> 2; // first 2 bits of ip are redudant as ip is granuratily of 4 bytes
-    return static_cast<uint16_t>((x >> 48) & 0xFFFF);
+    return static_cast<uint16_t>(( (x+ deltas.front() ) >> 48) & 0xFFFF);
     //return 1<<8;
 }
 
 
+uint16_t hash_fn(uint16_t x){
+    return (x%FEATURE_DIMENSION + FEATURE_DIMENSION)%FEATURE_DIMENSION;
+}
+
 uint16_t hash_delta(Delta x){
     return (x%FEATURE_DIMENSION + FEATURE_DIMENSION)%FEATURE_DIMENSION;
 }
+uint16_t hash_delta(){
+    
+    const int M = 127; // Modulo value (output range)
+    const int w1 = 31, w2 = 37, w3 = 41, w4 = 43; // Distinct prime weights
+
+    // Map inputs from [-64, 64] to [0, 128]
+    
+    int map_a = deltas[0] + 64;
+    int map_b = deltas[1] + 64;
+    int map_c = deltas[2] + 64;
+    int map_d = deltas[3] + 64;
+
+    // Compute the hash value
+    int hash_value = (w1 * map_a + w2 * map_b + w3 * map_c + w4 * map_d) % M;
+    
+    return static_cast<uint16_t>(hash_value);
+}
+
 
 
 // --- Find hash value indicating a state from the given features --- //
@@ -380,9 +403,10 @@ State get_state(uint64_t ip){
 
     State s;
     s[0] = (hash_ip(ip));
+    s[1] = hash_delta();
 
-    for(int i = 0 ; i < NUM_DELTAS ; i++)
-        s[i+1] = (hash_delta(deltas[i]));
+    // for(int i = 0 ; i < NUM_DELTAS ; i++)
+    //     s[i+1] = (hash_delta(deltas[i]));
 
    return s;
 }
