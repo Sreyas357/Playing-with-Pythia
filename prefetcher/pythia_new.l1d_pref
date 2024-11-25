@@ -381,17 +381,13 @@ uint16_t hash_delta(Delta x){
 uint16_t hash_delta(){
     
     const int M = 127; // Modulo value (output range)
-    const int w1 = 31, w2 = 37, w3 = 41, w4 = 43; // Distinct prime weights
+    const int w[] = { 31,37,41,43,47,53}; // Distinct prime weights
 
-    // Map inputs from [-64, 64] to [0, 128]
-    
-    int map_a = deltas[0] + 64;
-    int map_b = deltas[1] + 64;
-    int map_c = deltas[2] + 64;
-    int map_d = deltas[3] + 64;
+    int hash_value = 0;
 
-    // Compute the hash value
-    int hash_value = (w1 * map_a + w2 * map_b + w3 * map_c + w4 * map_d) % M;
+    for(int i = 0 ; i< NUM_DELTAS ; i++){
+        hash_value = ( hash_value + w[i]*(deltas[i]+64))%M;
+    }
     
     return static_cast<uint16_t>(hash_value);
 }
