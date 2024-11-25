@@ -6,7 +6,7 @@
 
 #define WINDOW_LEN 5000
 #define EQTABLE_SIZE 256
-#define NUM_TILES 3
+#define NUM_TILES 2
 #define TILE_WIDTH 4
 #define NUM_DELTAS 3
 #define PREFETCH_DEGREE 5
@@ -84,6 +84,13 @@ class TileEncoder{
                 encoded.push_back(tile_index);
 
             }
+
+            // for(int offset = 1; offset < num_tiles ; offset++){
+            //     uint16_t tile_index = (feature + offset)%FEATURE_DIMENSION;
+            //     encoded.push_back(tile_index);
+            // }
+
+
             return encoded;
 
         }
