@@ -6,6 +6,10 @@
 
 //map<uint64_t, uint64_t> last_accessed_address;	//Neelu: Stores last accessed address per IP.  
 
+int total_bytes_accesed = 0;
+double stale_bandwidth=0;
+long long int last_core_cycle;
+
 void CACHE::l1d_prefetcher_initialize() 
 {
 

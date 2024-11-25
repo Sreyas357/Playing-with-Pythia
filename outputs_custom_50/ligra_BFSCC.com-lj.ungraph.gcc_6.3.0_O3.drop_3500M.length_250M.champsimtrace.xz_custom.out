@@ -1,0 +1,33 @@
+
+*** ChampSim Multicore Out-of-Order Simulator ***
+
+Warmup Instructions: 50000000
+Simulation Instructions: 50000000
+Number of CPUs: 1
+LLC sets: 2048
+LLC ways: 16
+Off-chip DRAM Size: 4096 MB Channels: 1 Width: 64-bit Data Rate: 6400 MT/s
+CPU 0 runs ../Ligra/ligra_BFSCC.com-lj.ungraph.gcc_6.3.0_O3.drop_3500M.length_250M.champsimtrace.xz
+.xz
+CPU 0 Bimodal branch predictor
+BTB has LRU replacement policy
+ITLB has LRU replacement policy
+DTLB has LRU replacement policy
+STLB has LRU replacement policy
+L1I has LRU replacement policy
+CPU 0 L1D - Pythia Preftecher 
+L1D has LRU replacement policy
+--------- This is L2C prefetcher --------------
+L2C has LRU replacement policy
+LLC has LRU replacement policy
+Heartbeat CPU 0 instructions: 10000002 cycles: 3333345 heartbeat IPC: 2.99999 cumulative IPC: 2.99999 (Simulation time: 0 hr 0 min 14 sec) 
+Heartbeat CPU 0 instructions: 20000000 cycles: 6666677 heartbeat IPC: 3 cumulative IPC: 3 (Simulation time: 0 hr 0 min 27 sec) 
+Heartbeat CPU 0 instructions: 30000001 cycles: 10000011 heartbeat IPC: 3 cumulative IPC: 3 (Simulation time: 0 hr 0 min 40 sec) 
+Heartbeat CPU 0 instructions: 40000001 cycles: 13333345 heartbeat IPC: 3 cumulative IPC: 3 (Simulation time: 0 hr 0 min 53 sec) 
+Heartbeat CPU 0 instructions: 50000001 cycles: 16666678 heartbeat IPC: 3 cumulative IPC: 3 (Simulation time: 0 hr 1 min 7 sec) 
+
+Warmup complete CPU 0 instructions: 50000001 cycles: 16666678 (Simulation time: 0 hr 1 min 7 sec) 
+
+Heartbeat CPU 0 instructions: 60000000 cycles: 35749507 heartbeat IPC: 0.524031 cumulative IPC: 0.524031 (Simulation time: 0 hr 1 min 26 sec) 
+Heartbeat CPU 0 instructions: 70000000 cycles: 54567836 heartbeat IPC: 0.531397 cumulative IPC: 0.527688 (Simulation time: 0 hr 1 min 44 sec) 
+Caught signal: 2

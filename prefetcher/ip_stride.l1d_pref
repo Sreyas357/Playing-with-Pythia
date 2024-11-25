@@ -1,0 +1,150 @@
+#include "cache.h"
+
+// ------------------------- DO NOT CHANGE -------------------------------- //
+#define IP_TRACKER_COUNT 64           // Number of IP trackers
+#define PREFETCH_DEGREE 5             // Prefetch degree
+// ------------------------- DO NOT CHANGE -------------------------------- //
+
+#define MIN_STATE_REQ 1
+
+class IP_TRACKER {
+  public:
+    // ------------------------- Define the IP_TRACKER class here ------------------------- //
+    uint64_t ip;
+    uint64_t cl_addr;
+    uint64_t stride;
+    uint64_t state;
+    uint64_t last_time;
+
+    IP_TRACKER () {
+        ip = 0;
+        cl_addr = 0;
+        stride = 0;
+        state= 0;
+        last_time = 0;
+    };
+
+    void reinitialize(uint64_t ip_tag , uint64_t t){
+        ip = ip_tag;
+        cl_addr = 0;
+        stride = 0;
+        state = 0;
+        last_time = t;
+        
+    }
+
+};
+
+
+IP_TRACKER trackers_table[IP_TRACKER_COUNT];
+uint64_t present_time = 0;
+
+int total_bytes_accesed = 0;
+double stale_bandwidth=0;
+long long int last_core_cycle;
+
+// ------------------------- Initialize the prefetcher ------------------------- // 
+void CACHE::l1d_prefetcher_initialize() 
+{
+	cout << "CPU " << cpu << " L1D IP-based stride prefetcher" << endl;
+
+}
+
+
+void update_state(IP_TRACKER*entry,uint64_t stride) {
+
+    uint16_t conf = entry->state;
+
+    if(entry->stride == stride){
+        conf++;
+        if(conf > MIN_STATE_REQ+1 )
+            conf = MIN_STATE_REQ+1 ;
+    }
+    else{
+        
+        if(conf > 0){
+            conf--;
+        }
+    }
+
+    entry->state = conf;
+
+    if(entry->state == 0)
+        entry->stride = stride;
+
+}
+
+IP_TRACKER* find_tracker(uint64_t ip){
+
+    uint64_t min_time = trackers_table[0].last_time;
+    IP_TRACKER*tracker = trackers_table ;
+
+    for( int i = 0 ; i < IP_TRACKER_COUNT ; i++ ){
+
+        if( ip == trackers_table[i].ip){
+            trackers_table[i].last_time = present_time;
+            return trackers_table + i;
+        }
+
+        if( min_time > trackers_table[i].last_time){
+            tracker = trackers_table + i;
+            min_time = trackers_table[i].last_time;
+        }
+
+    }
+
+    tracker->reinitialize(ip,present_time);
+    return tracker;
+}
+
+
+
+// --------------- This is the main prefetcher operate function ---------------- // 
+void CACHE::l1d_prefetcher_operate(uint64_t addr, uint64_t ip, uint8_t cache_hit, uint8_t type, uint8_t critical_ip_flag)
+{
+    present_time++;
+
+    IP_TRACKER*tracker = find_tracker(ip);
+
+    uint64_t cl_addr = addr >> LOG2_BLOCK_SIZE;
+    uint64_t stride = cl_addr - tracker->cl_addr;
+
+    update_state(tracker,stride);
+
+    if ( tracker->state >= MIN_STATE_REQ ){
+
+        for (int j = 1 ; j <= PREFETCH_DEGREE ; j++) {
+
+            uint64_t pf_address = (cl_addr + stride*j ) << LOG2_BLOCK_SIZE;
+
+            // only issue a prefetch if the prefetch address is in the same 4 KB page
+            // as the current demand access address
+
+            if ((pf_address >> LOG2_PAGE_SIZE) == (addr >> LOG2_PAGE_SIZE)){
+                prefetch_line(ip,addr ,pf_address , FILL_L1 , 0);
+            }            
+        }
+
+        // Update the the find_entry
+    }
+
+    //update trakcer cl_addr
+    tracker->cl_addr = cl_addr;
+    
+    return;
+
+
+}
+
+// ------------------------- DO NOT CHANGE -------------------------------- //
+void CACHE::l1d_prefetcher_cache_fill(uint64_t v_addr, uint64_t addr, uint32_t set, uint32_t way, uint8_t prefetch, uint64_t v_evicted_addr, uint64_t evicted_addr, uint32_t metadata_in)
+{
+	return;
+}
+
+void CACHE::l1d_prefetcher_final_stats()
+{
+	cout << "CPU " << cpu << " L1D IP-based stride prefetcher final stats" << endl;
+	cout << "Degree: " << PREFETCH_DEGREE << endl;
+}
+// ------------------------- DO NOT CHANGE -------------------------------- //

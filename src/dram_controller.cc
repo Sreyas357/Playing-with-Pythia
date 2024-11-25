@@ -1,4 +1,5 @@
 #include "dram_controller.h"
+#include "temp.h"
 
 // initialized in main.cc
 uint32_t DRAM_MTPS, DRAM_DBUS_RETURN_TIME,
@@ -447,6 +448,17 @@ void MEMORY_CONTROLLER::process(PACKET_QUEUE *queue)
                 bank_request[op_channel][op_rank][op_bank].is_write = 0;
                 bank_request[op_channel][op_rank][op_bank].is_read = 0;
 
+                total_bytes_accesed += 8;
+
+                if( current_core_cycle[0] > last_core_cycle + 1e6 ){
+
+                    stale_bandwidth = (double)total_bytes_accesed/1e6;
+                    last_core_cycle = current_core_cycle[0];
+                    total_bytes_accesed = 0;
+    
+                }
+                // current_core_cycle[0] -> total cycles elapsed till now
+
                 scheduled_writes[op_channel]--;
             } else {
                 // update data bus cycle time
@@ -474,6 +486,18 @@ void MEMORY_CONTROLLER::process(PACKET_QUEUE *queue)
                 bank_request[op_channel][op_rank][op_bank].working = false;
                 bank_request[op_channel][op_rank][op_bank].is_write = 0;
                 bank_request[op_channel][op_rank][op_bank].is_read = 0;
+
+
+                // total_bytes_accesed += queue->entry[request_index].data_size;
+                total_bytes_accesed += 8;
+                
+                if( current_core_cycle[0] > last_core_cycle + 1e6 ){
+
+                    stale_bandwidth = (double)total_bytes_accesed/1e6;
+                    last_core_cycle = current_core_cycle[0];
+                    total_bytes_accesed = 0;
+    
+                }
 
                 scheduled_reads[op_channel]--;
             }

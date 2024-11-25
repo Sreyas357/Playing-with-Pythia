@@ -1,0 +1,3 @@
+
+Running experiment 1/36 with params: (-0.1, -0.1)
+Compiling with ./build_champsim.sh pythia no 1...

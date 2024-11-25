@@ -1,0 +1,516 @@
+#include "cache.h"
+#include <unordered_map>
+#include <queue>
+#include "temp.h"
+
+
+#define WINDOW_LEN 5000
+#define EQTABLE_SIZE 256
+#define NUM_TILES 3
+#define TILE_WIDTH 4
+#define NUM_DELTAS 3
+#define PREFETCH_DEGREE 5
+#define NUM_FEATURES 1+NUM_DELTAS
+
+#define expected_coverage 0.8
+#define expected_accuracy 0.8
+
+#define ratio1 -0.4
+#define ratio2 -1
+
+#define R_AT 40.0  // Reward for prefetching accurate and timely requests
+#define R_ANT  R_AT*0.7 // Rewards for prefecthing accurate but late requests
+#define FEATURE_DIMENSION 128
+
+
+double R_NPL = R_AT*ratio1 ; // Reward for no prefetch in case of low bandwidth usage;
+#define R_NPH  R_NPL*0.6  // Reward for no prefectch in case of high bandwidth usage;
+
+#define R_CL -12.0 // Prefetch request which is out of page boundary
+
+double R_INL = R_AT*ratio2; // reward for inaccurate prefetch in case of low bandwidth
+#define R_INH  R_INL*1.5  // reward for inaccurate prefetch in case of high bandwidth
+
+using addr_type =  uint64_t;
+using Action = int;
+using State = std::array<uint16_t,NUM_FEATURES>;
+using Reward = double;
+using Delta = int16_t; 
+
+
+
+unordered_map<Action,int>counter;
+struct EQentry{
+
+    State s; // state at which this action is taken
+    Action action; // Indicates the action taken
+    addr_type prefecthed_addr; //  Indicates the prefectched address
+    bool filled;  // Indicates that the prefetch action is filled or no
+    Reward reward; // reward assigned for this
+
+    EQentry( State s , Action a , addr_type addr ) :
+        s(s) , action(a), prefecthed_addr(addr) { reward = 0 ;}
+    EQentry() {}
+};
+
+class TileEncoder{
+    public:
+        int num_tiles;
+        double tile_width;
+
+        double min_val;
+        double max_val;
+
+
+        TileEncoder(int num_tiles,double tile_width ) : num_tiles(num_tiles) , tile_width(tile_width) {min_val = 0 ; max_val = 1e10 ; }
+        TileEncoder( int num_tiles , double tile_width, double min_val , double max_val ) : 
+            num_tiles(num_tiles),tile_width(tile_width),min_val(min_val),max_val(max_val) {}
+
+        vector<uint16_t>encode(uint16_t feature){
+
+            vector<uint16_t>encoded;
+
+            encoded.push_back(feature);
+
+            for(int offset = 0 ; offset < (num_tiles-1)/2 ; offset++ ){
+    
+                uint16_t tile_index = (feature + offset)%FEATURE_DIMENSION;
+                encoded.push_back(tile_index);
+
+            }
+            for(int offset = 0 ; offset < (num_tiles-1)/2 ; offset++ ){
+ 
+                uint16_t tile_index = (feature-offset)%FEATURE_DIMENSION;
+                encoded.push_back(tile_index);
+
+            }
+            return encoded;
+
+        }
+};
+
+
+std::deque<Delta>deltas;
+addr_type prev_cl_addr;
+Action set_of_actions[] = {-6,-3,-1,0,1,3,4,5,10,11,12,16,22,23,30,32} ;
+
+
+
+double alpha = 0.0065;
+double gammma = 0.556;
+double epsilon = 0.02;
+
+
+int total_bytes_accesed = 0;
+double stale_bandwidth=0;
+long long int last_core_cycle;
+
+uint64_t num_prefecthes = 0;
+uint64_t useful_prefetches = 0;
+long long int l1_access = 0;
+
+
+std::queue<EQentry>EQtable;
+unordered_map<uint16_t,unordered_map<Action,Reward>>QTable_feature[NUM_FEATURES];
+TileEncoder tile_encoder(NUM_TILES,TILE_WIDTH,0,(1<<16) -1 );
+
+
+
+State get_state(uint64_t ip);
+void update_reward_EQentry(addr_type addr);
+void update_EQentry(addr_type addr);
+Action best_action(State s);
+bool is_within_page(uint64_t prefetch_addr, uint64_t addr);
+Action random_action();
+addr_type caluclate_prefetch_addr(addr_type addr , Action offset);
+void apply_sarsa_update( EQentry & dq_entry);
+
+int num_high_bandwidth = 0;
+int num_low_bandwidth = 0;
+
+
+bool is_Bandiwidth_high(){
+
+    
+    if(stale_bandwidth > 0.1){
+        num_high_bandwidth++;
+        return true;
+    }
+
+    num_low_bandwidth++;
+    return false;
+
+}
+
+
+
+
+
+void CACHE::l1d_prefetcher_initialize() 
+{
+	cout << "CPU " << cpu << " L1D - Pythia Preftecher " << endl;
+
+    // ------- Intialize Features -------- //
+
+    for(int i = 0 ; i < NUM_DELTAS ; i++ ){
+        deltas.push_front(0);
+    }
+
+    prev_cl_addr = 0;
+
+    last_core_cycle = current_core_cycle[0];
+    
+
+    // -- Initialize QTable ---- //
+
+
+    for(int f = 0 ; f < NUM_FEATURES ; f++){
+        for(int s = 0 ; s < FEATURE_DIMENSION ; s++){
+            for(auto action : set_of_actions)
+                QTable_feature[f][s][action] = 1/(1-gammma);
+        }
+    }
+
+    
+
+}
+
+double c1 = 2;
+double d1 = 2;
+double c2 = 4;
+double d2 = 4;
+double c3 = 4;
+double d3 = 4;
+
+unordered_map<int,int>prefetch_degree_map;
+
+void modify_rewards(){
+
+    double coverage = 1 - double(l2_access)/l1_access;
+    double accuracy = double(useful_prefetches)/num_prefecthes;
+
+    R_NPL += c1*(coverage - expected_coverage) ;
+
+    R_INL += d1*( accuracy - expected_accuracy );
+
+    // //PREFETCH_DEGREE -= c3*(coverage-expected_coverage);
+    // PREFETCH_DEGREE += d3*(accuracy - expected_accuracy);
+
+    // PREFETCH_DEGREE = max(PREFETCH_DEGREE,1);
+    // PREFETCH_DEGREE = min(PREFETCH_DEGREE,7);
+
+    if( num_prefecthes < WINDOW_LEN  ){
+
+        R_NPL -= c2*(WINDOW_LEN - num_prefecthes)/WINDOW_LEN;
+
+        if( coverage < expected_coverage )
+            R_INL -= d2*(coverage-expected_coverage);
+
+    }
+
+    l1_access = 0;
+    l2_access = 0;
+
+    num_prefecthes = 0;
+    useful_prefetches = 0;
+
+
+    if(R_NPL> 0){
+        R_NPL=0;
+    }
+    if(R_INL>0){
+        R_INL=0;
+    }
+    if(R_NPL < -30){
+        R_NPL = -30;
+    }
+    if(R_INL < -20){
+        R_INL = -20;
+    }
+
+    prefetch_degree_map[PREFETCH_DEGREE]++;
+}
+
+
+void CACHE::l1d_prefetcher_operate(uint64_t addr, uint64_t ip, uint8_t cache_hit, uint8_t type, uint8_t critical_ip_flag)
+{   
+
+    // ------ Update feature variables ------//
+
+   l1_access++;
+
+   if(l1_access%WINDOW_LEN == 0 ){
+        modify_rewards();
+   }
+
+    addr_type cl_addr = addr >> LOG2_BLOCK_SIZE;
+    int present_delta = cl_addr - prev_cl_addr;
+
+    deltas.pop_back();
+    deltas.push_front(present_delta);
+
+    prev_cl_addr = cl_addr;
+
+    // ------ Update feature variables ------//
+
+    update_reward_EQentry(addr); // Update the EQentry correspoding to the address
+    
+    State s = get_state(ip); // Find state hash given by ip , last 4 deltas
+    Action a =  ( rand() < epsilon*RAND_MAX ) ? random_action() : best_action(s); // Find action
+
+
+    for(int i = 1 ; i <= PREFETCH_DEGREE ; i++){
+    
+        addr_type prefetch_addr = caluclate_prefetch_addr(addr,a*i);
+
+        if( a && is_within_page(addr,prefetch_addr)){  // if action is non zero and prefecth lies
+
+            num_prefecthes++;
+
+            prefetch_line(ip,addr,prefetch_addr,FILL_L1,0); // in same page then prefetch
+        }
+        else{
+            break;
+        }
+    }
+
+    addr_type prefetch_addr = caluclate_prefetch_addr(addr,a);
+
+    EQentry e(s,a,prefetch_addr); // create a new EQ entry
+
+    if(a == 0 ){
+
+        if( is_Bandiwidth_high() ){
+            e.reward  = R_NPH;
+        }
+        else{
+            e.reward = R_NPL;
+        }
+    }
+
+    else if( !is_within_page(addr,prefetch_addr)){
+        e.action = 0;
+        e.reward = R_CL;
+    }
+
+    EQtable.push(e);
+    
+    if(EQtable.size() <= EQTABLE_SIZE){
+        return;
+    }
+
+    // evict the entry and apply sarsa update
+
+    EQentry dq_entry = EQtable.back();
+    EQtable.pop();
+
+    if(dq_entry.reward == 0){
+
+        if(is_Bandiwidth_high()){
+            dq_entry.reward = R_INH;
+        }
+        else{
+            dq_entry.reward = R_INL;
+        }
+    }
+
+    apply_sarsa_update(dq_entry);
+        
+    return;
+}
+
+
+void CACHE::l1d_prefetcher_cache_fill(uint64_t v_addr, uint64_t addr, uint32_t set, uint32_t way, uint8_t prefetch, uint64_t v_evicted_addr, uint64_t evicted_addr, uint32_t metadata_in)
+{
+    update_EQentry(addr); // mark the eq entry as filled
+    return;
+}
+
+void CACHE::l1d_prefetcher_final_stats()
+{
+	cout << "CPU " << cpu << " L1D nextline prefetcher final stats" << endl;
+
+    for(auto ite : counter){
+        cout<<" Action = "<< ite.first << " : "<<ite.second<<endl;
+    }
+
+    cout<<"---------------Prefetch degree counts-----------------------"<<endl;
+
+    for(auto ite : prefetch_degree_map){
+        cout<<" prefetch degree = "<<ite.first << " : "<<ite.second<<endl;
+    }
+
+	
+    cout<<" number of times low bandwidth is  "<<num_low_bandwidth<<endl;
+    cout<<"number of times high bandwidth is "<<num_high_bandwidth<<endl;
+}
+
+
+uint16_t hash_ip(uint64_t x){
+    //x = x >> 2; // first 2 bits of ip are redudant as ip is granuratily of 4 bytes
+    return static_cast<uint16_t>((x >> 48) & 0xFFFF);
+    //return 1<<8;
+}
+
+
+uint16_t hash_delta(Delta x){
+    return (x%FEATURE_DIMENSION + FEATURE_DIMENSION)%FEATURE_DIMENSION;
+}
+
+
+// --- Find hash value indicating a state from the given features --- //
+State get_state(uint64_t ip){
+
+    State s;
+    s[0] = (hash_ip(ip));
+
+    for(int i = 0 ; i < NUM_DELTAS ; i++)
+        s[i+1] = (hash_delta(deltas[i]));
+
+   return s;
+}
+
+// ------ Update the reward in EQ entry ------//
+
+
+bool check_ifPrefetch(  addr_type addr, addr_type prefetch_addr , Action a){
+
+    for(int i = 0 ; i < PREFETCH_DEGREE ; i++){
+        
+        if( caluclate_prefetch_addr(prefetch_addr , i*a) == addr  )
+            return true;
+    }
+
+    return false;
+}
+
+
+void update_reward_EQentry(addr_type addr){
+    
+    int siz = EQtable.size();
+
+    for(int i = 0 ; i < siz ; i++ ){
+
+        EQentry e = EQtable.back();
+        EQtable.pop();
+
+        if(check_ifPrefetch(addr,e.prefecthed_addr,e.action)  ){
+
+            useful_prefetches++;
+
+            if( e.filled ){
+                e.reward += R_AT;
+            }
+            else{
+                e.reward += R_ANT;
+            }
+            e.reward = min(e.reward,PREFETCH_DEGREE*(Reward)R_AT);
+        }
+
+        EQtable.push(e);
+    }
+
+}
+
+// --- set the filled bit ---//
+
+void update_EQentry(addr_type addr){
+
+    int siz = EQtable.size();
+
+    for(int i = 0 ; i < siz ; i++ ){
+
+        EQentry e = EQtable.back();
+        EQtable.pop();
+
+        if(check_ifPrefetch(addr,e.prefecthed_addr,e.action) ){
+            e.filled = true;
+        }
+
+        EQtable.push(e);
+    }
+}
+
+
+
+// ----- Find the best action given the state ---- //
+
+Action best_action(State s ){
+
+    Action best_action = 0;
+    Reward max_qvalue = -1e10;
+
+    for( auto action : set_of_actions ){
+
+        Reward qvalue_temp = INT32_MIN ;
+
+        for( int f = 0 ; f < NUM_FEATURES ; f++ ){
+
+            std::vector<uint16_t>indices = tile_encoder.encode(static_cast<uint16_t>(s[f]));
+
+            Reward qvalue = 0;
+
+            qvalue += QTable_feature[f][indices[0]][action];
+
+            for(int t = 1 ; t < NUM_TILES ; t++ ){
+                qvalue += QTable_feature[f][indices[t]][action]/2;
+            }
+
+            qvalue_temp = max(qvalue,qvalue_temp);
+        
+        }
+
+        if( qvalue_temp > max_qvalue){
+            max_qvalue = qvalue_temp;
+            best_action = action;
+        }
+
+    }
+
+    counter[best_action]++;
+    return best_action;
+}
+
+
+// ---  Check if the prefetch address is within the same page -- //
+
+bool is_within_page(uint64_t prefetch_addr, uint64_t addr) {
+    return ( prefetch_addr >> LOG2_PAGE_SIZE ) == ( addr >> LOG2_PAGE_SIZE ); 
+}
+
+
+Action random_action(){
+
+    int num_actions = sizeof(set_of_actions)/sizeof(Action);
+    return set_of_actions[rand()%num_actions];
+}
+
+addr_type caluclate_prefetch_addr(addr_type addr , Action offset){
+
+    addr_type cl_addr = addr >> LOG2_BLOCK_SIZE;
+    return  ((cl_addr + offset) << LOG2_BLOCK_SIZE);
+
+}
+
+void apply_sarsa_update( EQentry & dq_entry){
+
+    Reward R = dq_entry.reward;
+    EQentry e= EQtable.front();
+
+    State s1 = dq_entry.s, s2 = e.s ;
+    Action a1 = dq_entry.action , a2 = e.action ;
+
+    for(int f = 0 ; f < NUM_FEATURES ; f++){
+
+        std::vector<uint16_t>indices1 = tile_encoder.encode(static_cast<uint16_t>(s1[f]));
+        std::vector<uint16_t>indices2 = tile_encoder.encode(static_cast<uint16_t>(s2[f]));
+
+        QTable_feature[f][indices1[0]][a1] += (QTable_feature[f][indices1[0]][a1]*(0-alpha) + alpha*(R + gammma*QTable_feature[f][indices2[0]][a2]));
+
+        for(int t = 1 ; t < NUM_TILES ; t++ ){
+            QTable_feature[f][indices1[t]][a1] += (QTable_feature[f][indices1[t]][a1]*(0-alpha) + alpha*(R + gammma*QTable_feature[f][indices2[t]][a2]))/(2);
+        }
+    }
+
+}
+
